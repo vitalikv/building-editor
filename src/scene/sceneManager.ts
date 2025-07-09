@@ -1,26 +1,29 @@
 import * as THREE from 'three';
+import Stats from 'stats.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 
 import { SceneOptions, CameraOptions, RendererOptions, GridOptions } from './types';
 
-import { JsonModelParser } from '../modelData/jsonModelParser';
+import { CreateModel } from '../modelData/createModel';
 
 export class SceneManager {
   private scene: THREE.Scene;
-  private camera: THREE.PerspectiveCamera;
+  private perspectiveCamera: THREE.PerspectiveCamera;
+  private orthographicCamera: THREE.OrthographicCamera;
+  private activeCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
   private renderer: THREE.WebGLRenderer;
   private controls: OrbitControls;
   private container: HTMLElement;
   private lights: THREE.Light[] = [];
   private grid?: THREE.GridHelper;
-  private animationFrameId: number | null = null;
+  private stats: Stats;
 
   constructor(containerId: string, options: SceneOptions = {}) {
     this.validateContainer(containerId);
     this.container = document.getElementById(containerId) as HTMLElement;
 
     this.initScene(options.backgroundColor);
-    this.initCamera(options.cameraOptions);
+    this.initCameras(options.cameraOptions);
     this.initRenderer(options.rendererOptions);
     this.initControls();
     this.initDefaultLights();
@@ -28,79 +31,17 @@ export class SceneManager {
 
     this.setupEventListeners();
 
-    this.startAnimation();
+    this.initStats();
 
-    this.getModel();
-    //this.test();
+    this.setCamera({ type: '2D' });
+    this.initModel();
   }
 
-  public async getModel() {
-    const jsonModel = new JsonModelParser();
-    await jsonModel.getJson();
+  private async initModel() {
+    const createModel = new CreateModel(this.scene);
+    await createModel.initModel();
 
-    const dataLevels = jsonModel.getDataLevels();
-
-    for (let n = 1; n < dataLevels.length; n++) {
-      const { dataLevel, dataWalls, ElementTypes } = jsonModel.getStructureLevel({ targetNumber: n });
-
-      const levelPosY = dataLevel.Elevation / 1000;
-
-      for (let i = 0; i < dataWalls.length; i++) {
-        const dWall = dataWalls[i];
-        const typeMat = dataWalls[i].WallPositionType;
-
-        const height = dWall.Height / 1000;
-        const p1 = new THREE.Vector2(dWall.Location.Start.X / 1000, dWall.Location.Start.Y / 1000);
-        const p2 = new THREE.Vector2(dWall.Location.End.X / 1000, dWall.Location.End.Y / 1000);
-
-        let width = 0.1;
-        if (typeMat === 'Facade') {
-          const r = ElementTypes.find((item) => item.Id === dWall.ElementTypeId);
-
-          width = 0;
-          for (let i2 = 0; i2 < r.Layers.length; i2++) {
-            width += r.Layers[i2].Thickness;
-          }
-
-          //console.log(dWall.ElementTypeId, r, width);
-          width /= 1000;
-        }
-
-        const dir = this.calcNormal2D({ p1, p2, reverse: true });
-        dir.multiplyScalar(width);
-
-        const form = [p1, p2, p2.clone().add(dir), p1.clone().add(dir)];
-
-        this.test({ form, height, levelPosY, typeMat });
-      }
-    }
-  }
-
-  // перпендикуляр линии (2D)
-  private calcNormal2D({ p1, p2, reverse = false }) {
-    let x = p1.y - p2.y;
-    let y = p2.x - p1.x;
-
-    // нормаль вывернуть в обратное напрвление
-    if (reverse) {
-      x *= -1;
-      y *= -1;
-    }
-
-    return new THREE.Vector2(x, y).normalize();
-  }
-
-  test({ form, height, levelPosY, typeMat }) {
-    //const form = [new THREE.Vector2(1.5, 0.1), new THREE.Vector2(-1.5, 0.1), new THREE.Vector2(-1.5, -0.1), new THREE.Vector2(1.5, -0.1)];
-    const shape = new THREE.Shape(form);
-    const geometry = new THREE.ExtrudeGeometry(shape, { bevelEnabled: false, depth: height });
-    geometry.rotateX(-Math.PI / 2);
-
-    let color = 0xcccccc;
-    if (typeMat === 'Facade') color = 0xad5603;
-    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color }));
-    mesh.position.set(0, levelPosY, 0);
-    this.scene.add(mesh);
+    this.render();
   }
 
   private validateContainer(containerId: string): void {
@@ -114,11 +55,25 @@ export class SceneManager {
     this.scene.background = new THREE.Color(backgroundColor);
   }
 
-  private initCamera(options: CameraOptions = {}): void {
+  private initCameras(options: CameraOptions = {}): void {
     const { fov = 45, aspect = this.container.clientWidth / this.container.clientHeight, near = 0.1, far = 1000, position = { x: 0, y: 15, z: -30 } } = options;
 
-    this.camera = new THREE.PerspectiveCamera(fov, aspect, near, far);
-    this.camera.position.set(position.x, position.y, position.z);
+    // Инициализация перспективной камеры
+    this.perspectiveCamera = new THREE.PerspectiveCamera(fov, aspect, near, far);
+    this.perspectiveCamera.position.set(position.x, position.y, position.z);
+    this.perspectiveCamera.lookAt(0, 0, 0);
+    this.perspectiveCamera.userData.state = { position: this.perspectiveCamera.position.clone(), rotation: this.perspectiveCamera.rotation.clone(), target: new THREE.Vector3() };
+
+    // Инициализация ортографической камеры
+    const width = this.container.clientWidth / 50;
+    const height = this.container.clientHeight / 50;
+    this.orthographicCamera = new THREE.OrthographicCamera(-width, width, height, -height, near, far);
+    this.orthographicCamera.position.set(0, 100, 0);
+    this.orthographicCamera.lookAt(0, 0, 0);
+    this.orthographicCamera.userData.state = { position: this.orthographicCamera.position.clone(), rotation: this.orthographicCamera.rotation.clone(), target: new THREE.Vector3() };
+
+    // Установка активной камеры (по умолчанию перспективная)
+    this.activeCamera = this.orthographicCamera;
   }
 
   private initRenderer(options: RendererOptions = {}): void {
@@ -131,7 +86,7 @@ export class SceneManager {
   }
 
   private initControls(): void {
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls = new OrbitControls(this.activeCamera, this.renderer.domElement);
     this.controls.addEventListener('change', () => this.render());
   }
 
@@ -169,37 +124,41 @@ export class SceneManager {
   }
 
   private handleResize(): void {
-    this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
-    this.camera.updateProjectionMatrix();
+    const aspect = this.container.clientWidth / this.container.clientHeight;
+
+    // Обновление перспективной камеры
+    this.perspectiveCamera.aspect = aspect;
+    this.perspectiveCamera.updateProjectionMatrix();
+
+    // Обновление ортографической камеры
+    const width = this.container.clientWidth / 50;
+    const height = this.container.clientHeight / 50;
+    this.orthographicCamera.left = -width;
+    this.orthographicCamera.right = width;
+    this.orthographicCamera.top = height;
+    this.orthographicCamera.bottom = -height;
+    this.orthographicCamera.updateProjectionMatrix();
+
     this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
     this.render();
   }
 
-  private startAnimation(): void {
-    if (this.animationFrameId !== null) return;
-
-    const animate = () => {
-      this.animationFrameId = requestAnimationFrame(animate);
-      this.controls.update();
-      this.render();
-    };
-
-    animate();
-  }
-
-  private stopAnimation(): void {
-    if (this.animationFrameId !== null) {
-      cancelAnimationFrame(this.animationFrameId);
-      this.animationFrameId = null;
-    }
+  private initStats(): void {
+    this.stats = new Stats();
+    this.stats.showPanel(0); // 0: fps, 1: ms, 2: mb
+    this.stats.dom.style.position = 'absolute';
+    this.stats.dom.style.left = '0px';
+    this.stats.dom.style.top = '0px';
+    this.container.appendChild(this.stats.dom);
   }
 
   public render(): void {
-    this.renderer.render(this.scene, this.camera);
+    this.stats.begin();
+    this.renderer.render(this.scene, this.activeCamera);
+    this.stats.end();
   }
 
   public dispose(): void {
-    this.stopAnimation();
     this.controls.dispose();
     this.renderer.dispose();
 
@@ -215,11 +174,50 @@ export class SceneManager {
     return this.scene;
   }
 
-  public getCamera(): THREE.PerspectiveCamera {
-    return this.camera;
+  public getCamera(): THREE.PerspectiveCamera | THREE.OrthographicCamera {
+    return this.activeCamera;
   }
 
   public getRenderer(): THREE.WebGLRenderer {
     return this.renderer;
+  }
+
+  public setCamera({ type }): void {
+    this.saveCameraState();
+
+    if (type === '2D') {
+      // Переключаемся на ортографическую камеру
+      this.activeCamera = this.orthographicCamera;
+      this.controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+    }
+    if (type === '3D') {
+      // Переключаемся на перспективную камеру
+      this.activeCamera = this.perspectiveCamera;
+      this.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+    }
+
+    // Обновляем контролы орбиты для новой камеры
+    this.controls.object = this.activeCamera;
+    this.restoreCameraState();
+
+    this.render();
+  }
+
+  private saveCameraState(): void {
+    this.activeCamera.userData.state = {
+      position: this.activeCamera.position.clone(),
+      rotation: this.activeCamera.rotation.clone(),
+      target: this.controls.target.clone(),
+    };
+  }
+
+  private restoreCameraState(): void {
+    const state = this.activeCamera.userData.state;
+    if (state) {
+      this.activeCamera.position.copy(state.position);
+      this.activeCamera.rotation.copy(state.rotation);
+      this.controls.target.copy(state.target);
+      this.controls.update();
+    }
   }
 }

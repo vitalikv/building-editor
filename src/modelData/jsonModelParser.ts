@@ -29,14 +29,21 @@ export class JsonModelParser {
     return this.dataModel.Site.Building.Storeys;
   }
 
-  public getStructureLevel({ targetNumber }) {
+  public getStructureLevel({ targetNumber = null, idLevel = null }) {
     const data = this.dataModel;
 
     console.log('Загруженные данные:', data);
     console.log('-----');
     console.log('Elements:', data.Library.ElementTypes);
 
-    const dataLevel = this.getLevel(data.Site.Building.Storeys, targetNumber);
+    let dataLevel = null;
+
+    if (targetNumber !== null) {
+      dataLevel = this.getLevel(data.Site.Building.Storeys, targetNumber);
+    }
+    if (idLevel !== null) {
+      dataLevel = data.Site.Building.Storeys[idLevel];
+    }
     console.log('dataLevel', dataLevel);
 
     const dataWalls = this.getWallsByLevel({ dataLevel, arrWalls: data.Site.Building.Elements.Walls });
