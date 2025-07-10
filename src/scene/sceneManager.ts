@@ -2,9 +2,11 @@ import * as THREE from 'three';
 import Stats from 'stats.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 
-import { SceneOptions, CameraOptions, RendererOptions, GridOptions } from './types';
-
+import { EffectsManager } from './effectsManager';
+import { ClickManager, ClickEvent } from './clickManager';
 import { CreateModel } from '../modelData/createModel';
+
+import { SceneOptions, CameraOptions, RendererOptions, GridOptions } from './types';
 
 export class SceneManager {
   private scene: THREE.Scene;
@@ -12,6 +14,7 @@ export class SceneManager {
   private orthographicCamera: THREE.OrthographicCamera;
   private activeCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
   private renderer: THREE.WebGLRenderer;
+  private effectsManager: EffectsManager;
   private controls: OrbitControls;
   private container: HTMLElement;
   private lights: THREE.Light[] = [];
@@ -29,11 +32,10 @@ export class SceneManager {
     this.initDefaultLights();
     this.addGrid({ size: 100, divisions: 25, colorCenterLine: 0x222222, colorGrid: 0xcccccc });
 
-    this.setupEventListeners();
-
     this.initStats();
 
-    this.setCamera({ type: '2D' });
+    this.setCamera({ type: '3D' });
+    this.setupEventListeners();
     this.initModel();
   }
 
@@ -78,11 +80,19 @@ export class SceneManager {
 
   private initRenderer(options: RendererOptions = {}): void {
     const { antialias = true, pixelRatio = window.devicePixelRatio } = options;
-
     this.renderer = new THREE.WebGLRenderer({ antialias });
     this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
     this.renderer.setPixelRatio(pixelRatio);
     this.container.appendChild(this.renderer.domElement);
+
+    this.effectsManager = new EffectsManager(this.scene, this.activeCamera, this.renderer, {
+      antialias: false,
+      outline: {
+        edgeStrength: 5.0,
+        edgeThickness: 2.0,
+        visibleEdgeColor: 0xffff00,
+      },
+    });
   }
 
   private initControls(): void {
@@ -121,6 +131,38 @@ export class SceneManager {
 
   private setupEventListeners(): void {
     window.addEventListener('resize', () => this.handleResize());
+
+    this.clickEvent();
+  }
+
+  private clickEvent() {
+    const clickHandler = new ClickManager(this.scene, this.activeCamera, this.renderer.domElement, { threshold: 0.2 });
+
+    // Подписка на события клика
+    this.renderer.domElement.addEventListener('object-clicked', (event: CustomEvent<ClickEvent>) => {
+      const { object, point } = event.detail;
+      console.log('Clicked object:', object);
+      console.log('Intersection point:', point);
+
+      // Пример: подсветка выбранного объекта
+      if (object instanceof THREE.Mesh) {
+        const originalMaterial = object.material;
+        object.material = new THREE.MeshBasicMaterial({
+          color: 0xff0000,
+          wireframe: true,
+        });
+        //object.removeFromParent();
+        // setTimeout(() => {
+        //   object.material = originalMaterial;
+        //   this.render();
+        // }, 1000);
+
+        this.render();
+      }
+    });
+
+    // Включение/выключение обработчика
+    clickHandler.setEnabled(true);
   }
 
   private handleResize(): void {
@@ -140,6 +182,7 @@ export class SceneManager {
     this.orthographicCamera.updateProjectionMatrix();
 
     this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+    this.effectsManager.setSize(this.container.clientWidth, this.container.clientHeight);
     this.render();
   }
 
@@ -154,7 +197,8 @@ export class SceneManager {
 
   public render(): void {
     this.stats.begin();
-    this.renderer.render(this.scene, this.activeCamera);
+    //this.renderer.render(this.scene, this.activeCamera);
+    this.effectsManager.render();
     this.stats.end();
   }
 
@@ -194,6 +238,15 @@ export class SceneManager {
       // Переключаемся на перспективную камеру
       this.activeCamera = this.perspectiveCamera;
       this.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+    }
+
+    this.effectsManager.renderPass.camera = this.activeCamera;
+    this.effectsManager.outlinePass.renderCamera = this.activeCamera;
+
+    // Для ShaderPass может потребоваться обновление
+    if (this.effectsManager.fxaaPass) {
+      this.effectsManager.composer.removePass(this.effectsManager.fxaaPass);
+      //this.effectsManager.initFXAA(); // Переинициализируем с новой камерой
     }
 
     // Обновляем контролы орбиты для новой камеры
