@@ -10,31 +10,26 @@ export class EffectsManager {
   public outlinePass: OutlinePass;
   public renderPass: RenderPass;
   public fxaaPass: ShaderPass;
+  public enabled = false;
 
-  constructor(
-    private scene: THREE.Scene,
-    private camera: THREE.Camera,
-    private renderer: THREE.WebGLRenderer,
-    private config: {
-      antialias?: boolean;
-      outline?: {
-        edgeStrength?: number;
-        edgeGlow?: number;
-        edgeThickness?: number;
-        pulsePeriod?: number;
-        visibleEdgeColor?: number;
-        hiddenEdgeColor?: number;
-      };
-    } = {}
-  ) {
+  private scene: THREE.Scene;
+  private camera: THREE.Camera;
+  private renderer: THREE.WebGLRenderer;
+
+  public init({ scene, camera, renderer }) {
+    this.enabled = true;
+
+    this.scene = scene;
+    this.camera = camera;
+    this.renderer = renderer;
+
     this.initComposer();
     this.initOutlineEffect();
-    if (this.config.antialias) {
-      this.initFXAA();
-    }
+    //this.initFXAA();
   }
 
   private initComposer(): void {
+    console.log(this.renderer);
     this.composer = new EffectComposer(this.renderer);
     this.renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(this.renderPass);
@@ -46,13 +41,15 @@ export class EffectsManager {
     this.outlinePass = new OutlinePass(resolution, this.scene, this.camera);
 
     // Настройки по умолчанию или из конфига
-    this.outlinePass.edgeStrength = this.config.outline?.edgeStrength ?? 3.0;
-    this.outlinePass.edgeGlow = this.config.outline?.edgeGlow ?? 0.5;
-    this.outlinePass.edgeThickness = this.config.outline?.edgeThickness ?? 1.0;
-    this.outlinePass.pulsePeriod = this.config.outline?.pulsePeriod ?? 1.5;
+    this.outlinePass.edgeStrength = 5.0;
+    this.outlinePass.edgeGlow = 0;
+    this.outlinePass.edgeThickness = 0.1;
+    this.outlinePass.pulsePeriod = 0;
 
-    this.outlinePass.visibleEdgeColor.setHex(this.config.outline?.visibleEdgeColor ?? 0x00ff00);
-    this.outlinePass.hiddenEdgeColor.setHex(this.config.outline?.hiddenEdgeColor ?? 0x000000);
+    this.outlinePass.visibleEdgeColor.setHex(0x00ff00);
+    this.outlinePass.hiddenEdgeColor.setHex(0x00ff00);
+
+    this.outlinePass.overlayMaterial.blending = THREE.CustomBlending;
 
     this.composer.addPass(this.outlinePass);
   }
