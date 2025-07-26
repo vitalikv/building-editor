@@ -33,6 +33,6 @@ export interface RendererOptions {
   preserveDrawingBuffer?: boolean;
 }
 
-// Дополнительные типы, которые могут понадобиться
+// Дополнительные типы
 export type DisposeCallback = () => void;
 export type SceneEvent = 'init' | 'dispose' | 'resize';
